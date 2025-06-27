@@ -23,8 +23,28 @@ Private m_RejectQuantityColIdx As Long
 
 Private Const PROC_NAME As String = "GenerateDPPMTable"
 
+' Helper function to get chips per wafer for a given part number from tblWaferList
+Private Function GetChipsPerWafer(tblWafer As ListObject, partNumber As String) As Double
+    Dim waferPartArr As Variant
+    Dim waferRow As Long
+    Dim idxPartNum As Long, idxChips As Long
+    GetChipsPerWafer = 0
+    If tblWafer Is Nothing Then Exit Function
+    On Error Resume Next
+    idxPartNum = tblWafer.ListColumns(Config.WAFER_LIST_COL_PART_NUM).Index
+    idxChips = tblWafer.ListColumns(Config.WAFER_LIST_COL_CHIPS_PER_WAFER).Index
+    waferPartArr = tblWafer.DataBodyRange.Value
+    For waferRow = 1 To UBound(waferPartArr, 1)
+        If Trim(CStr(waferPartArr(waferRow, idxPartNum))) = partNumber Then
+            GetChipsPerWafer = waferPartArr(waferRow, idxChips)
+            Exit For
+        End If
+    Next waferRow
+    On Error GoTo 0
+End Function
+
 Public Sub GenerateTable()
-    Dim wsSource As Worksheet, wsTarget As Worksheet, wsWafer As Worksheet, tblTarget As ListObject, tblWafer As ListObject
+    Dim tblIQA As ListObject, wsTarget As Worksheet, wsWafer As Worksheet, tblTarget As ListObject, tblWafer As ListObject
     Dim lastRow As Long, targetRow As Long, i As Long
     Dim key As Variant, tempArray As Variant, dataArr As Variant, outputArr() As Variant
     Dim shipmentDate As String, inspectedDateVal As Variant, supplierName As String, partNumber As String, inspectedBy As String
@@ -34,6 +54,7 @@ Public Sub GenerateTable()
     Dim dataDict As Object
     Dim iqaWorkbook As Workbook
     Dim procStartTime As Double
+    Dim colIdxShipDate As Long, colIdxInspDate As Long, colIdxSupplier As Long, colIdxPartNum As Long, colIdxInspBy As Long, colIdxQtyIn As Long, colIdxRejQty As Long
 
     On Error GoTo GenericErrorHandler
     Utils.InitStatusBar PROC_NAME
@@ -51,37 +72,30 @@ Public Sub GenerateTable()
             Utils.LogMessage "[" & PROC_NAME & "] Global configuration not loaded. Aborting.", True
             GoTo CleanUp
         End If
-        If Not LoadTableModuleConfig(m_Config) Then GoTo CleanUp ' Error logged in LoadTableModuleConfig
-        Utils.UpdateStatusBarMessage "Configuration loaded.", stageComplete:=True
 
-        ' Set the source sheet from the current workbook
+        '2025-06-27 MS: Disable the following line as it is not needed anymore
+        'If Not LoadTableModuleConfig(m_Config) Then GoTo CleanUp ' Error logged in LoadTableModuleConfig
+        'Utils.UpdateStatusBarMessage "Configuration loaded.", stageComplete:=True
+
+        ' Set the source table from the IQA Database
         Utils.UpdateStatusBarMessage "Setting up IQA Database...", True
-        Set wsSource = SetupIQADatabase(iqaWorkbook, m_Config)
-        If wsSource Is Nothing Then GoTo CleanUp ' Error logged in SetupIQADatabase or LoadTableModuleConfig
+        Set tblIQA = SetupIQADatabase(iqaWorkbook, m_Config)
+        If tblIQA Is Nothing Then GoTo CleanUp
         Utils.UpdateStatusBarMessage "IQA Database setup complete.", stageComplete:=True
 
-        ' Get or create the target sheet and table
-        Utils.UpdateStatusBarMessage "Setting up target DPPM table...", True
-        Set wsTarget = Utils.GetSheet(Config.DPPM_OUTPUT_SHEET_NAME)
-        If wsTarget Is Nothing Then
-            Set wsTarget = ThisWorkbook.Sheets.Add
-            wsTarget.Name = Config.DPPM_OUTPUT_SHEET_NAME
-            Utils.LogMessage "[" & PROC_NAME & "] Created target sheet: '" & Config.DPPM_OUTPUT_SHEET_NAME & "'"
-        End If
+        ' Get column indices from table using Config.bas constants
+        colIdxShipDate = tblIQA.ListColumns(Config.IQA_COL_SHIP_DATE).Index
+        colIdxInspDate = tblIQA.ListColumns(Config.IQA_COL_INSPECTED_BY).Index 
+        colIdxSupplier = tblIQA.ListColumns(Config.IQA_COL_SUPPLIER).Index
+        colIdxPartNum = tblIQA.ListColumns(Config.IQA_COL_PART_NUM).Index
+        colIdxInspBy = tblIQA.ListColumns(Config.IQA_COL_INSPECTED_BY).Index
+        colIdxQtyIn = tblIQA.ListColumns(Config.IQA_COL_QUANTITY_IN).Index
+        colIdxRejQty = tblIQA.ListColumns(Config.IQA_COL_TOTAL_REJECT_QUANTITY).Index
 
-        ' Clear existing table if it exists, or clear sheet for new table
-        On Error Resume Next
-        If Not tblTarget Is Nothing Then
-            If Not tblTarget.DataBodyRange Is Nothing Then
-                tblTarget.DataBodyRange.Delete
-            End If
-            Utils.LogMessage "[" & PROC_NAME & "] Cleared data from existing table: '" & Config.DPPM_OUTPUT_TABLE_NAME & "'"
-        Else
-            wsTarget.Cells.ClearContents
-            Utils.LogMessage "[" & PROC_NAME & "] Cleared sheet for new table: '" & Config.DPPM_OUTPUT_SHEET_NAME & "'"
-        End If
-        On Error GoTo GenericErrorHandler
-        Utils.UpdateStatusBarMessage "Target DPPM table setup.", stageComplete:=True
+        ' Read all data rows from the table
+        dataArr = tblIQA.DataBodyRange.Value
+        lastRow = UBound(dataArr, 1)
+        Utils.LogMessage "[" & PROC_NAME & "] Last row in source IQA table: " & lastRow
 
         ' Set the Wafer List sheet and table
         Utils.UpdateStatusBarMessage "Setting up Wafer List...", True
@@ -103,74 +117,33 @@ Public Sub GenerateTable()
         Utils.LogMessage "[" & PROC_NAME & "] Initializing dictionary for data aggregation."
         Set dataDict = CreateObject("Scripting.Dictionary")
 
-        ' Find the last row in the source sheet
-        lastRow = wsSource.Cells(wsSource.Rows.Count, "B").End(xlUp).Row ' Assuming Col B (Supplier) is reliable for last row
-        Utils.LogMessage "[" & PROC_NAME & "] Last row in source IQA sheet: " & lastRow
-
-        ' Read the entire relevant range from source IQA sheet into an array
-        ' Determine the maximum column index needed from the source sheet
-        Dim maxColIdx As Long
-        maxColIdx = Application.WorksheetFunction.Max(m_SourceShipmentDateColIdx, m_InspectedDateColIdx, m_SupplierNameColIdx, _
-                                                    m_PartNumberColIdx, m_InspectedByColIdx, m_QuantityInColIdx, m_RejectQuantityColIdx)
-
-        If maxColIdx = 0 Then
-            Utils.LogMessage "[" & PROC_NAME & "] One or more source column indices are invalid (0). Aborting.", True
-            GoTo CleanUp
-        End If
-
-        If lastRow >= 2 Then ' Ensure there's data beyond headers
-            ' Read up to the maximum column index required
-            Utils.LogMessage "[" & PROC_NAME & "] Reading data from source IQA sheet range: A2:" & Cells(lastRow, maxColIdx).Address(False, False), False
-            dataArr = wsSource.Range(wsSource.Cells(2, 1), wsSource.Cells(lastRow, maxColIdx)).Value ' Using .Value as dates are involved and .Value2 might return numbers for dates
-        Else
-            Utils.LogMessage "[" & PROC_NAME & "] No data found in source IQA sheet.", True
-            GoTo OutputHeadersOnly ' Proceed to output headers if no data
-        End If
-
         ' Loop through each row in the source data array
         Utils.LogMessage "[" & PROC_NAME & "] Starting data extraction and aggregation."
         procStartTime = Timer
-        For i = 1 To UBound(dataArr, 1) ' dataArr is 1-based
+        For i = 1 To lastRow
             If i Mod Utils.STATUS_BAR_RECORD_UPDATE_INTERVAL = 0 Or Timer - Utils.g_lngLastStatusBarUpdateTime > Utils.STATUS_BAR_UPDATE_INTERVAL_SECONDS Then
-                Utils.UpdateStatusBarProgress "Aggregating DPPM Data", i, UBound(dataArr, 1), procStartTime
+                Utils.UpdateStatusBarProgress "Aggregating DPPM Data", i, lastRow, procStartTime
             End If
 
-            shipmentDate = Format(dataArr(i, m_SourceShipmentDateColIdx), "yyyy-MM-dd")
-            inspectedDateVal = dataArr(i, m_InspectedDateColIdx) ' Keep as variant for IsDate check
-            supplierName = Trim(CStr(dataArr(i, m_SupplierNameColIdx)))
-            partNumber = Trim(CStr(dataArr(i, m_PartNumberColIdx)))
-            inspectedBy = Trim(CStr(dataArr(i, m_InspectedByColIdx)))
+            shipmentDate = Format(dataArr(i, colIdxShipDate), "yyyy-MM-dd")
+            inspectedDateVal = dataArr(i, colIdxInspDate)
+            supplierName = Trim(CStr(dataArr(i, colIdxSupplier)))
+            partNumber = Trim(CStr(dataArr(i, colIdxPartNum)))
+            inspectedBy = Trim(CStr(dataArr(i, colIdxInspBy)))
 
             quantityIn = 0
-            If IsNumeric(dataArr(i, m_QuantityInColIdx)) Then quantityIn = CDbl(dataArr(i, m_QuantityInColIdx))
+            If IsNumeric(dataArr(i, colIdxQtyIn)) Then quantityIn = CDbl(dataArr(i, colIdxQtyIn))
 
             rejectQuantity = 0
-            If IsNumeric(dataArr(i, m_RejectQuantityColIdx)) Then rejectQuantity = CDbl(dataArr(i, m_RejectQuantityColIdx))
+            If IsNumeric(dataArr(i, colIdxRejQty)) Then rejectQuantity = CDbl(dataArr(i, colIdxRejQty))
 
             'Utils.LogMessage "[" & PROC_NAME & "] Row " & i + 1 & ": ShipDate=" & shipmentDate & ", Supp=" & supplierName & ", PN=" & partNumber & ", QtyIn=" & quantityIn & ", RejQty=" & rejectQuantity, False
 
             chipsPerWaferCount = 0
             If supplierName = "EXCELITAS CANADA INC." Then
-                'Utils.LogMessage "[" & PROC_NAME & "] Row " & i + 1 & ": ECI supplier. Looking up chips/wafer for PN: " & partNumber, False
-                On Error Resume Next
-                chipsPerWaferCount = Application.WorksheetFunction.VLookup(partNumber, tblWafer.Range, Utils.GetColumnIndexByName(tblWafer, Config.WAFER_LIST_COL_CHIPS), False)
-                If Err.Number <> 0 Then
-                    chipsPerWaferCount = 0 ' Not found or error
-                    'Utils.LogMessage "[" & PROC_NAME & "] Row " & i + 1 & ": VLookup for PN '" & partNumber & "' in Wafer List failed. Error: " & Err.Description, False
-                    Err.Clear
-                End If
-                On Error GoTo GenericErrorHandler
-
-                If chipsPerWaferCount <= 0 Then
-                    'Utils.LogMessage "[" & PROC_NAME & "] Row " & i + 1 & ": Chips/wafer for PN '" & partNumber & "' not found or invalid (" & chipsPerWaferCount & "). Skipping adjustment.", False
-                    ' Decide if row should be skipped or processed with original quantityIn
-                    ' Current logic implies original quantityIn is used if lookup fails or is <=0, then adjusted if >0
-                    ' For safety, let's ensure it's not an error causing skip:
-                    ' GoTo NextRow ' If this is critical
-                Else
-                    'Utils.LogMessage "[" & PROC_NAME & "] Row " & i + 1 & ": Chips/wafer found: " & chipsPerWaferCount & ". Original QtyIn: " & quantityIn, False
+                chipsPerWaferCount = GetChipsPerWafer(tblWafer, partNumber)
+                If chipsPerWaferCount > 0 Then
                     quantityIn = quantityIn * chipsPerWaferCount
-                    'Utils.LogMessage "[" & PROC_NAME & "] Row " & i + 1 & ": Adjusted QtyIn: " & quantityIn, False
                 End If
             End If
 
@@ -210,7 +183,7 @@ Public Sub GenerateTable()
 
 NextRow:
         Next i
-        If UBound(dataArr, 1) > 0 Then Utils.UpdateStatusBarProgress "Aggregating DPPM Data", UBound(dataArr, 1), UBound(dataArr, 1), procStartTime ' Final update
+        If lastRow > 0 Then Utils.UpdateStatusBarProgress "Aggregating DPPM Data", lastRow, lastRow, procStartTime ' Final update
         Utils.LogMessage "[" & PROC_NAME & "] Data extraction and aggregation complete. " & dataDict.Count & " unique keys found."
 
 OutputHeadersOnly:
@@ -425,40 +398,50 @@ Private Function FindAndSetColumnIndex(ByVal headerRow As Range, ByVal colNameCo
         FindAndSetColumnIndex = False
     End If
 End Function
-Private Function GetColumnIndicesFromSource(wsSource As Worksheet) As Boolean
-    ' Determines column indices based on names stored in module-level variables.
-    ' This should be called AFTER wsSource is set.
+Private Function GetColumnIndicesFromSource(tblSource As ListObject) As Boolean
+    ' Determines column indices based on names stored in module-level variables using Excel Table (ListObject).
+    ' This should be called AFTER tblSource is set.
     Dim funcName As String: funcName = "GetColumnIndicesFromSource"
-    Dim headerRow As Range
     Dim allIndicesFound As Boolean
+    Dim col As ListColumn
 
     On Error GoTo ErrorHandler
     GetColumnIndicesFromSource = False ' Default to failure
     allIndicesFound = True
 
-    If wsSource Is Nothing Then
-        Utils.LogMessage "[" & PROC_NAME & "] " & funcName & ": Source worksheet is not set.", True
+    If tblSource Is Nothing Then
+        Utils.LogMessage "[" & PROC_NAME & "] " & funcName & ": Source table is not set.", True
         Exit Function
     End If
 
-    Set headerRow = wsSource.Rows(1) ' Assuming headers are in row 1
-
-    ' Get indices for all required columns
-    ' Use the new helper function
-    If Not FindAndSetColumnIndex(headerRow, m_SourceShipmentDateColName, m_SourceShipmentDateColIdx, wsSource.Name) Then allIndicesFound = False
-    If Not FindAndSetColumnIndex(headerRow, m_InspectedDateColName, m_InspectedDateColIdx, wsSource.Name) Then allIndicesFound = False
-    If Not FindAndSetColumnIndex(headerRow, m_SupplierNameColName, m_SupplierNameColIdx, wsSource.Name) Then allIndicesFound = False
-    If Not FindAndSetColumnIndex(headerRow, m_PartNumberColName, m_PartNumberColIdx, wsSource.Name) Then allIndicesFound = False
-    If Not FindAndSetColumnIndex(headerRow, m_InspectedByColName, m_InspectedByColIdx, wsSource.Name) Then allIndicesFound = False
-    If Not FindAndSetColumnIndex(headerRow, m_QuantityInColName, m_QuantityInColIdx, wsSource.Name) Then allIndicesFound = False
-    If Not FindAndSetColumnIndex(headerRow, m_RejectQuantityColName, m_RejectQuantityColIdx, wsSource.Name) Then allIndicesFound = False
+    ' Helper to get column index by name from ListObject
+    Dim functionColIdx As Long
+    functionColIdx = 0
+    
+    ' Use ListColumns to get indices
+    On Error Resume Next
+    m_SourceShipmentDateColIdx = tblSource.ListColumns(m_SourceShipmentDateColName).Index
+    If m_SourceShipmentDateColIdx = 0 Then allIndicesFound = False
+    m_InspectedDateColIdx = tblSource.ListColumns(m_InspectedDateColName).Index
+    If m_InspectedDateColIdx = 0 Then allIndicesFound = False
+    m_SupplierNameColIdx = tblSource.ListColumns(m_SupplierNameColName).Index
+    If m_SupplierNameColIdx = 0 Then allIndicesFound = False
+    m_PartNumberColIdx = tblSource.ListColumns(m_PartNumberColName).Index
+    If m_PartNumberColIdx = 0 Then allIndicesFound = False
+    m_InspectedByColIdx = tblSource.ListColumns(m_InspectedByColName).Index
+    If m_InspectedByColIdx = 0 Then allIndicesFound = False
+    m_QuantityInColIdx = tblSource.ListColumns(m_QuantityInColName).Index
+    If m_QuantityInColIdx = 0 Then allIndicesFound = False
+    m_RejectQuantityColIdx = tblSource.ListColumns(m_RejectQuantityColName).Index
+    If m_RejectQuantityColIdx = 0 Then allIndicesFound = False
+    On Error GoTo 0
 
     If allIndicesFound Then
-        Utils.LogMessage "[" & PROC_NAME & "] " & funcName & ": All source column indices determined successfully.", False
+        Utils.LogMessage "[" & PROC_NAME & "] " & funcName & ": All source column indices determined successfully (using table).", False
         GetColumnIndicesFromSource = True
     Else
-        MsgBox "One or more required columns were not found in the IQA Database sheet ('" & wsSource.Name & "')." & vbCrLf & _
-               "Please check the column names in the source sheet against the configuration and the ExecutionLog.txt for details.", vbCritical
+        MsgBox "One or more required columns were not found in the IQA Database table ('" & tblSource.Name & "')." & vbCrLf & _
+               "Please check the column names in the source table against the configuration and the ExecutionLog.txt for details.", vbCritical
     End If
     Exit Function
 
@@ -467,7 +450,7 @@ ErrorHandler:
     GetColumnIndicesFromSource = False
 End Function
 
-Private Function SetupIQADatabase(ByRef iqaWorkbook As Workbook, ByVal cfg As Object) As Worksheet
+Private Function SetupIQADatabase(ByRef iqaWorkbook As Workbook, ByVal cfg As Object) As ListObject
     Dim iqaSource As Worksheet
     Dim iqaDatabasePath As String
 
@@ -484,11 +467,9 @@ Private Function SetupIQADatabase(ByRef iqaWorkbook As Workbook, ByVal cfg As Ob
             Exit Function
         End If
 
-        ' Open the IQA Database workbook
-        Application.EnableEvents = False
+        ' Add a logic that will disable all macros when opening the IQA Database
+        ' This is to ensure that the IQA Database is opened in a safe mode
         Set iqaWorkbook = Workbooks.Open(Filename:=iqaDatabasePath, ReadOnly:=True, IgnoreReadOnlyRecommended:=True, UpdateLinks:=False)
-        Application.EnableEvents = True
-
         If iqaWorkbook Is Nothing Then
             Utils.LogMessage "[" & PROC_NAME & "] Failed to open IQA Database at: " & iqaDatabasePath, True
             Exit Function
@@ -501,19 +482,29 @@ Private Function SetupIQADatabase(ByRef iqaWorkbook As Workbook, ByVal cfg As Ob
             Exit Function
         End If
 
-        ' remove active filter in the IQA Database sheet
-        If iqaSource.AutoFilterMode Then iqaSource.AutoFilterMode = False
+        Dim tblIQA As ListObject
+        Set tblIQA = Nothing ' Reset the table variable to ensure it's not stale
+        Set tblIQA = iqaSource.ListObjects(Config.IQA_TABLE_NAME) ' Use constant from Config.bas
+        If tblIQATable Is Nothing Then
+            Utils.LogMessage "[" & PROC_NAME & "] Table '" & Config.IQA_TABLE_NAME & "' not found in the IQA sheet '" & Config.IQA_SHEET_NAME & "'.", True
+            MsgBox "Table '" & Config.IQA_TABLE_NAME & "' not found in the IQA sheet '" & Config.IQA_SHEET_NAME & "'.", vbExclamation
+            Exit Function
+        End If
 
+        ' remove active filter in the IQA Database table if it exists
+        If tblIQA.AutoFilter.FilterMode Then
+            tblIQA.AutoFilter.ShowAllData
+        End If
         Utils.LogMessage "[" & PROC_NAME & "] IQA Database setup successfully from: " & iqaDatabasePath, False
         
         ' After successfully setting wsSource, get the column indices
-        If Not GetColumnIndicesFromSource(iqaSource) Then
-            Set iqaSource = Nothing ' Indicate failure
+        If Not GetColumnIndicesFromSource(tblIQA) Then
+            Set tblIQA = Nothing ' Indicate failure
             ' Error already logged by GetColumnIndicesFromSource
             Exit Function
         End If
         
-        Set SetupIQADatabase = iqaSource
+        Set SetupIQADatabase = tblIQA
 
     Exit Function
 

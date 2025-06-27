@@ -89,12 +89,12 @@ Public Const DPPM_COL_INSPECTED_QTY As String = "Inspected Quantity Received"
 Public Const DPPM_COL_INSPECTED_REJECT As String = "Inspected Units Reject"
 Public Const DPPM_COL_INSPECTED_DPPM As String = "Inspected DPPM"
 
-Public Const WAFER_LIST_SHEET_NAME As String = "Wafer List"
-Public Const WAFER_LIST_TABLE_NAME As String = "tblWaferList" ' Assuming Wafer List is a table
-Public Const WAFER_LIST_COL_PART_NUM_LOOKUP As String = "Part Number" ' Column to lookup part number in Wafer List
-Public Const WAFER_LIST_COL_CHIPS As String = "Chips Per Wafer"   ' Column containing chips per wafer value
+' --- Wafer List Table and Columns ---
+Public Const WAFER_LIST_TABLE_NAME As String = "tblWaferList"
+Public Const WAFER_LIST_COL_PART_NUM As String = "Part Number"
+Public Const WAFER_LIST_COL_PART_DESC As String = "Part Description"
+Public Const WAFER_LIST_COL_CHIPS_PER_WAFER As String = "Number of chips per wafer"
 
-' --- Configuration Keys for GenerateDPPMTable module (used in Config sheet) ---
 Public Const CONFIG_KEY_IQA_DB_PATH As String = "IQA Database Path"
 Public Const CONFIG_KEY_IQA_SRC_SHIP_DATE_COLNAME As String = "IQA Source Shipment Date ColName"
 Public Const CONFIG_KEY_IQA_SRC_INSP_DATE_COLNAME As String = "IQA Source Inspected Date ColName"
@@ -106,12 +106,12 @@ Public Const CONFIG_KEY_IQA_SRC_REJ_QTY_COLNAME As String = "IQA Source Reject Q
 
 ' --- DPPM Summary ---
 ' Keys for Config Sheet (to retrieve sheet/table names for summaries)
-Public Const CONFIG_KEY_DPPM_DAILY_SHEET_NAME As String = "DPPM Daily Summary Sheet Name"
-Public Const CONFIG_KEY_DPPM_DAILY_TABLE_NAME As String = "DPPM Daily Summary Table Name"
-Public Const CONFIG_KEY_DPPM_WEEKLY_SHEET_NAME As String = "DPPM Weekly Summary Sheet Name"
-Public Const CONFIG_KEY_DPPM_WEEKLY_TABLE_NAME As String = "DPPM Weekly Summary Table Name"
-Public Const CONFIG_KEY_DPPM_MONTHLY_SHEET_NAME As String = "DPPM Monthly Summary Sheet Name"
-Public Const CONFIG_KEY_DPPM_MONTHLY_TABLE_NAME As String = "DPPM Monthly Summary Table Name"
+Public Const CONFIG_KEY_DPPM_DAILY_SHEET_NAME As String = "DailySummary"
+Public Const CONFIG_KEY_DPPM_DAILY_TABLE_NAME As String = "tblDailySummary"
+Public Const CONFIG_KEY_DPPM_WEEKLY_SHEET_NAME As String = "WeeklySummary"
+Public Const CONFIG_KEY_DPPM_WEEKLY_TABLE_NAME As String = "tblWeeklySummary"
+Public Const CONFIG_KEY_DPPM_MONTHLY_SHEET_NAME As String = "MonthlySummary"
+Public Const CONFIG_KEY_DPPM_MONTHLY_TABLE_NAME As String = "tblMonthlySummary"
 
 ' Column Names for Summary Tables
 Public Const SUMMARY_COL_PERIOD As String = "Date" ' Or "Period"; holds Day, Week (YYYY-WW##), Month (YYYY-MMMM)
