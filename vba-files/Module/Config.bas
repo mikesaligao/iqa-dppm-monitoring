@@ -90,6 +90,7 @@ Public Const DPPM_COL_INSPECTED_REJECT As String = "Inspected Units Reject"
 Public Const DPPM_COL_INSPECTED_DPPM As String = "Inspected DPPM"
 
 ' --- Wafer List Table and Columns ---
+Public Const WAFER_LIST_SHEET_NAME As String = "Wafer List"
 Public Const WAFER_LIST_TABLE_NAME As String = "tblWaferList"
 Public Const WAFER_LIST_COL_PART_NUM As String = "Part Number"
 Public Const WAFER_LIST_COL_PART_DESC As String = "Part Description"
@@ -123,3 +124,14 @@ Public Const SUMMARY_COL_INSPECTED_REJECT As String = "Inspected Units Reject"
 Public Const SUMMARY_COL_INSPECTED_DPPM_CALC As String = "Inspected DPPM"
 
 Public Const DEFAULT_TABLE_STYLE As String = "TableStyleMedium9"
+
+' --- Procedure Name Constants (for Logging/Status) ---
+Public Const PROC_GENERATE_SUMMARY As String = "GenerateDPPMSummary"
+Public Const PROC_GENERATE_SUMMARY_BY_TYPE As String = "GenerateSummaryByType"
+Public Const PROC_LOAD_SUMMARY_CONFIG As String = "LoadSummaryConfig"
+
+' --- Procedure Name Constants (for Logging/Status) ---
+Public Const PROC_GENERATE_TABLE As String = "GenerateDPPMTable"
+Public Const PROC_GENERATE_TABLE_WRITE As String = "GenerateTable_WriteDPPMTable"
+Public Const PROC_GENERATE_TABLE_FORMAT As String = "GenerateTable_FormatDPPMTable"
+Public Const PROC_LOAD_IQA_DB As String = "GenerateTable_LoadIQADatabase"
