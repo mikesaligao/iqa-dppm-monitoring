@@ -1,356 +1,456 @@
 Attribute VB_Name = "GenerateDPPMTable"
 
 Option Explicit
-' Declare a global variable To store configuration
-Public GlobalConfig As Object
+' Declare a module-level variable To store configuration
+Private m_Config As Object
 
-Public ShipmentDateCol As Long ' Column For Shipment Date
-Public InspectedDateCol As Long ' Column For Inspected Date
-Public SupplierNameCol As Long ' Column For Supplier Name
-Public PartNumberCol As Long ' Column For Part Number
-Public InspectedByCol As Long ' Column For Inspected By
-Public QuantityInCol As Long ' Column For Quantity In
-Public RejectQuantityCol As Long ' Column For Reject Quantity
+' Module-level variables for source IQA column indices (populated from config)
+Private m_SourceShipmentDateColName As String
+Private m_InspectedDateColName As String
+Private m_SupplierNameColName As String
+Private m_PartNumberColName As String
+Private m_InspectedByColName As String
+Private m_QuantityInColName As String
+Private m_RejectQuantityColName As String
+
+Private m_SourceShipmentDateColIdx As Long
+Private m_InspectedDateColIdx As Long
+Private m_SupplierNameColIdx As Long
+Private m_PartNumberColIdx As Long
+Private m_InspectedByColIdx As Long
+Private m_QuantityInColIdx As Long
+Private m_RejectQuantityColIdx As Long
+
+Private Const PROC_NAME As String = "GenerateDPPMTable"
+
+' Helper function to get chips per wafer for a given part number from tblWaferList
+Private Function GetChipsPerWafer(tblWafer As ListObject, partNumber As String) As Double
+    Dim waferPartArr As Variant
+    Dim waferRow As Long
+    Dim idxPartNum As Long, idxChips As Long
+    GetChipsPerWafer = 0
+    If tblWafer Is Nothing Then Exit Function
+    On Error Resume Next
+    idxPartNum = tblWafer.ListColumns(Config.WAFER_LIST_COL_PART_NUM).Index
+    idxChips = tblWafer.ListColumns(Config.WAFER_LIST_COL_CHIPS_PER_WAFER).Index
+    waferPartArr = tblWafer.DataBodyRange.Value
+    For waferRow = 1 To UBound(waferPartArr, 1)
+        If Trim(CStr(waferPartArr(waferRow, idxPartNum))) = partNumber Then
+            GetChipsPerWafer = waferPartArr(waferRow, idxChips)
+            Exit For
+        End If
+    Next waferRow
+    On Error GoTo 0
+End Function
 
 Public Sub GenerateTable()
-    Dim wsSource As Worksheet, wsTarget As Worksheet, wsWafer As Worksheet
-    Dim lastRow As Long, targetRow As Long
-    Dim key As Variant
-    Dim shipmentDate As String, inspectedDate As String
-    Dim supplierName As String, partNumber As String, inspectedBy As String
-    Dim quantityIn As Double, rejectQuantity As Double
+    Dim tblIQA As ListObject, wsTarget As Worksheet, wsWafer As Worksheet, tblTarget As ListObject, tblWafer As ListObject
+    Dim lastRow As Long, targetRow As Long, i As Long
+    Dim key As Variant, tempArray As Variant, dataArr As Variant, outputArr() As Variant
+    Dim shipmentDate As String, inspectedDateVal As Variant, supplierName As String, partNumber As String, inspectedBy As String
+    Dim quantityIn As Double, rejectQuantity As Double, chipsPerWaferCount As Double
     Dim overallQuantity As Double, overallRejects As Double, overallDPPM As Double
     Dim inspectedQuantity As Double, inspectedRejects As Double, inspectedDPPM As Double
-    Dim tempArray As Variant
-    Dim chipsPerWaferCount As Double
     Dim dataDict As Object
-    Dim i As Long
     Dim iqaWorkbook As Workbook
-    Dim outputArr() As Variant
+    Dim procStartTime As Double
+    Dim colIdxShipDate As Long, colIdxInspDate As Long, colIdxSupplier As Long, colIdxPartNum As Long, colIdxInspBy As Long, colIdxQtyIn As Long, colIdxRejQty As Long
 
-    On Error GoTo ErrorHandler
+    On Error GoTo GenericErrorHandler
+    Utils.InitStatusBar PROC_NAME
 
         ' Disable screen updating For performance
         Application.ScreenUpdating = False
-        Debug.Print "Execution started: " & Now
+        Application.Calculation = xlCalculationManual
+        Application.EnableEvents = False
+        Utils.LogMessage "[" & PROC_NAME & "] Execution started."
 
         ' Load configuration from the Config sheet
-        Debug.Print "Loading configuration from Config sheet."
-        Set GlobalConfig = Nothing
-        Call LoadConfigFromSheet
+        Utils.UpdateStatusBarMessage "Loading configuration...", True
+        Set m_Config = Utils.GetGlobalConfig()
+        If m_Config Is Nothing Or m_Config.Count = 0 Then
+            Utils.LogMessage "[" & PROC_NAME & "] Global configuration not loaded. Aborting.", True
+            GoTo CleanUp
+        End If
 
-        ' Set the source sheet from the current workbook
-        Set wsSource = SetupIQADatabase(iqaWorkbook)
-        If wsSource Is Nothing Then Exit Sub
-            Debug.Print "Source sheet 'IQA Database' found in ThisWorkbook."
+        '2025-06-27 MS: Disable the following line as it is not needed anymore
+        'If Not LoadTableModuleConfig(m_Config) Then GoTo CleanUp ' Error logged in LoadTableModuleConfig
+        'Utils.UpdateStatusBarMessage "Configuration loaded.", stageComplete:=True
 
-            ' Check If the "dppm-database" sheet exists in ThisWorkbook
-            On Error Resume Next
-            Set wsTarget = ThisWorkbook.Sheets("dppm-database")
-            On Error GoTo 0
-                If wsTarget Is Nothing Then
-                    Debug.Print "Target sheet 'dppm-database' does Not exist in ThisWorkbook. Creating a New sheet."
-                    Set wsTarget = ThisWorkbook.Sheets.Add
-                    wsTarget.Name = "dppm-database"
-                Else
-                    Debug.Print "Target sheet 'dppm-database' found in ThisWorkbook."
+        ' Set the source table from the IQA Database
+        Utils.UpdateStatusBarMessage "Setting up IQA Database...", True
+        Set tblIQA = SetupIQADatabase(iqaWorkbook, m_Config)
+        If tblIQA Is Nothing Then GoTo CleanUp
+        Utils.UpdateStatusBarMessage "IQA Database setup complete.", stageComplete:=True
+
+        ' Get column indices from table using Config.bas constants
+        colIdxShipDate = tblIQA.ListColumns(Config.IQA_COL_SHIP_DATE).Index
+        colIdxInspDate = tblIQA.ListColumns(Config.IQA_COL_INSPECTED_BY).Index 
+        colIdxSupplier = tblIQA.ListColumns(Config.IQA_COL_SUPPLIER).Index
+        colIdxPartNum = tblIQA.ListColumns(Config.IQA_COL_PART_NUM).Index
+        colIdxInspBy = tblIQA.ListColumns(Config.IQA_COL_INSPECTED_BY).Index
+        colIdxQtyIn = tblIQA.ListColumns(Config.IQA_COL_QUANTITY_IN).Index
+        colIdxRejQty = tblIQA.ListColumns(Config.IQA_COL_TOTAL_REJECT_QUANTITY).Index
+
+        ' Read all data rows from the table
+        dataArr = tblIQA.DataBodyRange.Value
+        lastRow = UBound(dataArr, 1)
+        Utils.LogMessage "[" & PROC_NAME & "] Last row in source IQA table: " & lastRow
+
+        ' Set the Wafer List sheet and table
+        Utils.UpdateStatusBarMessage "Setting up Wafer List...", True
+        Set wsWafer = Utils.GetSheet(Config.WAFER_LIST_SHEET_NAME)
+        If wsWafer Is Nothing Then
+            Utils.LogMessage "[" & PROC_NAME & "] Wafer List sheet '" & Config.WAFER_LIST_SHEET_NAME & "' not found!", True
+            GoTo CleanUp
+        End If
+        On Error Resume Next
+        Set tblWafer = wsWafer.ListObjects(Config.WAFER_LIST_TABLE_NAME)
+        On Error GoTo GenericErrorHandler
+        If tblWafer Is Nothing Then
+            Utils.LogMessage "[" & PROC_NAME & "] Wafer List table '" & Config.WAFER_LIST_TABLE_NAME & "' not found on sheet '" & Config.WAFER_LIST_SHEET_NAME & "'!", True
+            GoTo CleanUp
+        End If
+        Utils.UpdateStatusBarMessage "Wafer List setup.", stageComplete:=True
+
+        ' Initialize dictionary For aggregation
+        Utils.LogMessage "[" & PROC_NAME & "] Initializing dictionary for data aggregation."
+        Set dataDict = CreateObject("Scripting.Dictionary")
+
+        ' Loop through each row in the source data array
+        Utils.LogMessage "[" & PROC_NAME & "] Starting data extraction and aggregation."
+        procStartTime = Timer
+        For i = 1 To lastRow
+            If i Mod Utils.STATUS_BAR_RECORD_UPDATE_INTERVAL = 0 Or Timer - Utils.g_lngLastStatusBarUpdateTime > Utils.STATUS_BAR_UPDATE_INTERVAL_SECONDS Then
+                Utils.UpdateStatusBarProgress "Aggregating DPPM Data", i, lastRow, procStartTime
+            End If
+
+            shipmentDate = Format(dataArr(i, colIdxShipDate), "yyyy-MM-dd")
+            inspectedDateVal = dataArr(i, colIdxInspDate)
+            supplierName = Trim(CStr(dataArr(i, colIdxSupplier)))
+            partNumber = Trim(CStr(dataArr(i, colIdxPartNum)))
+            inspectedBy = Trim(CStr(dataArr(i, colIdxInspBy)))
+
+            quantityIn = 0
+            If IsNumeric(dataArr(i, colIdxQtyIn)) Then quantityIn = CDbl(dataArr(i, colIdxQtyIn))
+
+            rejectQuantity = 0
+            If IsNumeric(dataArr(i, colIdxRejQty)) Then rejectQuantity = CDbl(dataArr(i, colIdxRejQty))
+
+            'Utils.LogMessage "[" & PROC_NAME & "] Row " & i + 1 & ": ShipDate=" & shipmentDate & ", Supp=" & supplierName & ", PN=" & partNumber & ", QtyIn=" & quantityIn & ", RejQty=" & rejectQuantity, False
+
+            chipsPerWaferCount = 0
+            If supplierName = "EXCELITAS CANADA INC." Then
+                chipsPerWaferCount = GetChipsPerWafer(tblWafer, partNumber)
+                If chipsPerWaferCount > 0 Then
+                    quantityIn = quantityIn * chipsPerWaferCount
                 End If
+            End If
 
-                ' Set the Wafer List sheet from the current workbook
-                On Error Resume Next
-                Set wsWafer = ThisWorkbook.Sheets("Wafer List")
-                On Error GoTo 0
-                    If wsWafer Is Nothing Then
-                        MsgBox "Wafer List sheet Not found!", vbExclamation
-                     Exit Sub
-                    End If
+            If shipmentDate = "" Or supplierName = "" Or partNumber = "" Then
+                'Utils.LogMessage "[" & PROC_NAME & "] Row " & i + 1 & ": Missing key data (ShipDate, Supplier, or PartNumber). Skipping.", False
+                GoTo NextRow
+            End If
 
-                    ' Initialize dictionary For aggregation
-                    Debug.Print "Initializing dictionary For data aggregation."
-                    Set dataDict = CreateObject("Scripting.Dictionary")
+            ' Create a unique key for grouping by shipment date
+            key = shipmentDate & "|" & supplierName & "|" & partNumber
+            If Not dataDict.exists(key) Then
+                ' Array: 0:Date, 1:Supplier, 2:PartNum, 3:InspectedBy,
+                '        4:OverallQty, 5:OverallRejects, 6:InspectedQty, 7:InspectedRejects
+                dataDict.Add key, Array(shipmentDate, supplierName, partNumber, inspectedBy, 0, 0, 0, 0)
+            End If
+            tempArray = dataDict(key)
+            tempArray(4) = tempArray(4) + quantityIn     ' Overall Quantity Received
+            tempArray(5) = tempArray(5) + rejectQuantity ' Overall Units Reject
+            dataDict(key) = tempArray
 
-                    ' Find the last row in the source sheet
-                    lastRow = wsSource.Cells(wsSource.Rows.Count, "B").End(xlUp).Row
-                    Debug.Print "Last row in source sheet: " & lastRow
+            ' Aggregate by inspected date if valid
+            If IsDate(inspectedDateVal) Then
+                Dim formattedInspectedDate As String
+                formattedInspectedDate = Format(CDate(inspectedDateVal), "yyyy-MM-dd") ' Ensure it's treated as date before formatting
+                key = formattedInspectedDate & "|" & supplierName & "|" & partNumber ' Use the same key structure
 
-                    ' Read the entire range into an array To avoid repeated cell access
-                    Dim dataArr As Variant
-                    ' Assuming the data starts from row 2 And goes To the last row in column BC
-                    dataArr = wsSource.Range(wsSource.Cells(2, 1), wsSource.Cells(lastRow, RejectQuantityCol)).Value
-
-                    ' Loop through each row in the source sheet
-                    Debug.Print "Starting data extraction And aggregation."
-                    For i = 1 To UBound(dataArr, 1) ' Start from 1 since dataArr is 1-based
-                        shipmentDate = Format(dataArr(i, ShipmentDateCol), "yyyy-MM-dd")
-                        inspectedDate = dataArr(i, InspectedDateCol)
-                        supplierName = dataArr(i, SupplierNameCol)
-                        partNumber = dataArr(i, PartNumberCol)
-                        inspectedBy = dataArr(i, InspectedByCol)
-
-                        ' Quantity in is in column F, check If it's numeric
-                        quantityIn = 0
-                        If IsNumeric(dataArr(i, QuantityInCol)) Then
-                            quantityIn = dataArr(i, QuantityInCol)
-                        End If
-
-                        ' Reject quantity is in column BC, check If it's numeric
-                        rejectQuantity = 0
-                        If IsNumeric(dataArr(i, RejectQuantityCol)) Then
-                            rejectQuantity = dataArr(i, RejectQuantityCol)
-                        End If
-
-                        ' Log the raw values being read
-                        Debug.Print "Row " & i & ": ShipmentDate=" & shipmentDate & ", SupplierName=" & supplierName & ", PartNumber=" & partNumber & ", InspectedBy=" & inspectedBy & ", QuantityIn=" & quantityIn & ", RejectQuantity=" & rejectQuantity
-
-                        ' Reset chipsPerWaferCount To avoid reusing previous values
-                        chipsPerWaferCount = 0
-
-                        ' Check For supplier-specific logic
-                        If supplierName = "EXCELITAS CANADA INC." Then
-                            Debug.Print "Row " & i & ": Supplier is EXCELITAS CANADA INC. Checking Wafer List For chips per wafer count."
-                            On Error Resume Next
-                            chipsPerWaferCount = Application.WorksheetFunction.VLookup(partNumber, wsWafer.Range("A:C"), 3, False)
-                            On Error GoTo 0
-                                If chipsPerWaferCount <= 0 Then
-                                    Debug.Print "Row " & i & ": Chips per wafer count Not found Or invalid. Skipping row."
-                                    GoTo NextRow
-                                    End If
-                                    Debug.Print "Row " & i & ": Chips per wafer count found: " & chipsPerWaferCount
-                                    quantityIn = quantityIn * chipsPerWaferCount
-                                    Debug.Print "Row " & i & ": Adjusted Quantity In: " & quantityIn
-                                End If
-
-                                ' Skip rows With missing key data
-                                If shipmentDate = "" Or supplierName = "" Or partNumber = "" Then
-                                    Debug.Print "Row " & i & ": Missing key data. Skipping row."
-                                    GoTo NextRow
-                                    End If
-
-                                    ' Create a unique key For grouping
-                                    key = shipmentDate & "|" & supplierName & "|" & partNumber
-
-                                    ' Aggregate data in the dictionary
-                                    If Not dataDict.exists(key) Then
-                                        Debug.Print "Adding New key To dictionary: " & key
-                                        dataDict.Add key, Array(shipmentDate, supplierName, partNumber, inspectedBy, 0, 0, 0, 0)
-                                    End If
-
-                                    ' Retrieve, update, And store the array back in the dictionary
-                                    tempArray = dataDict(key)
-                                    tempArray(4) = tempArray(4) + quantityIn ' Overall Quantity Received
-                                    tempArray(5) = tempArray(5) + rejectQuantity ' Overall Units Reject
-                                    dataDict(key) = tempArray
-
-                                    Debug.Print "Row " & i & ": Overall Quantity Received updated: " & tempArray(4)
-                                    Debug.Print "Row " & i & ": Overall Units Reject updated: " & tempArray(5)
-
-                                    ' Check If inspectedDate is a valid date
-                                    If IsDate(inspectedDate) Then
-                                        inspectedDate = Format(inspectedDate, "yyyy-MM-dd")
-                                        key = inspectedDate & "|" & supplierName & "|" & partNumber
-                                        If Not dataDict.exists(key) Then
-                                            Debug.Print "Adding New key To dictionary: " & key
-                                            dataDict.Add key, Array(inspectedDate, supplierName, partNumber, inspectedBy, 0, 0, 0, 0)
-                                        End If
-                                        tempArray = dataDict(key)
-                                        tempArray(6) = tempArray(6) + quantityIn ' Inspected Quantity Received
-                                        tempArray(7) = tempArray(7) + rejectQuantity ' Inspected Units Reject
-                                        dataDict(key) = tempArray
-
-                                        Debug.Print "Row " & i & ": Inspected Quantity Received updated: " & tempArray(6)
-                                        Debug.Print "Row " & i & ": Inspected Units Reject updated: " & tempArray(7)
-                                    Else
-                                        Debug.Print "Row " & i & ": Invalid Inspected Date. Skipping row."
-                                    End If
+                If Not dataDict.exists(key) Then
+                    dataDict.Add key, Array(formattedInspectedDate, supplierName, partNumber, inspectedBy, 0, 0, 0, 0)
+                End If
+                tempArray = dataDict(key)
+                tempArray(6) = tempArray(6) + quantityIn     ' Inspected Quantity Received
+                tempArray(7) = tempArray(7) + rejectQuantity ' Inspected Units Reject
+                dataDict(key) = tempArray
+            Else
+                'Utils.LogMessage "[" & PROC_NAME & "] Row " & i + 1 & ": Invalid Inspected Date (" & CStr(inspectedDateVal) & "). Skipping inspected aggregation for this entry.", False
+            End If
 
 NextRow:
-                                Next i
+        Next i
+        If lastRow > 0 Then Utils.UpdateStatusBarProgress "Aggregating DPPM Data", lastRow, lastRow, procStartTime ' Final update
+        Utils.LogMessage "[" & PROC_NAME & "] Data extraction and aggregation complete. " & dataDict.Count & " unique keys found."
 
-                                ' Pre-size the output array: [1 To rowCount, 1 To 10]
-                                ReDim outputArr(1 To dataDict.Count + 1, 1 To 10)
+OutputHeadersOnly:
+        ' Pre-size the output array: [1 To dict.Count + 1 (for headers), 1 To 10 columns]
+        ReDim outputArr(1 To dataDict.Count + 1, 1 To 10)
 
-                                ' Write headers To the target sheet
-                                Debug.Print "Writing headers To the target sheet."
-                                wsTarget.Cells.Clear
-                                outputArr(1, 1) = "Date"
-                                outputArr(1, 2) = "Supplier Name"
-                                outputArr(1, 3) = "Part Number"
-                                outputArr(1, 4) = "Inspected By"
-                                outputArr(1, 5) = "Overall Quantity Received"
-                                outputArr(1, 6) = "Overall Units Reject"
-                                outputArr(1, 7) = "Overall DPPM"
-                                outputArr(1, 8) = "Inspected Quantity Received"
-                                outputArr(1, 9) = "Inspected Units Reject"
-                                outputArr(1, 10) = "Inspected DPPM"
+        ' Write headers to the output array
+        Utils.LogMessage "[" & PROC_NAME & "] Preparing headers for the target table."
+        outputArr(1, 1) = Config.DPPM_COL_DATE
+        outputArr(1, 2) = Config.DPPM_COL_SUPPLIER
+        outputArr(1, 3) = Config.DPPM_COL_PART_NUM
+        outputArr(1, 4) = Config.DPPM_COL_INSPECTED_BY
+        outputArr(1, 5) = Config.DPPM_COL_OVERALL_QTY
+        outputArr(1, 6) = Config.DPPM_COL_OVERALL_REJECT
+        outputArr(1, 7) = Config.DPPM_COL_OVERALL_DPPM
+        outputArr(1, 8) = Config.DPPM_COL_INSPECTED_QTY
+        outputArr(1, 9) = Config.DPPM_COL_INSPECTED_REJECT
+        outputArr(1, 10) = Config.DPPM_COL_INSPECTED_DPPM
 
-                                ' Write aggregated data To the target sheet
-                                Debug.Print "Writing aggregated data To the target sheet."
-                                targetRow = 2
-                                For Each key In dataDict.keys
-                                    tempArray = dataDict(key)
-                                    shipmentDate = tempArray(0)
-                                    supplierName = tempArray(1)
-                                    partNumber = tempArray(2)
-                                    inspectedBy = tempArray(3)
-                                    overallQuantity = tempArray(4)
-                                    overallRejects = tempArray(5)
-                                    inspectedQuantity = tempArray(6)
-                                    inspectedRejects = tempArray(7)
-                                    overallDPPM = 0
-                                    If overallQuantity > 0 Then
-                                        overallDPPM = (overallRejects / overallQuantity) * 1000000
-                                    End If
+        ' Write aggregated data to the output array
+        Utils.LogMessage "[" & PROC_NAME & "] Writing aggregated data to array."
+        targetRow = 2 ' Start data from the second row of the array
+        For Each key In dataDict.keys
+            tempArray = dataDict(key)
+            shipmentDate = tempArray(0) ' This is the date (either shipment or inspected)
+            supplierName = tempArray(1)
+            partNumber = tempArray(2)
+            inspectedBy = tempArray(3)
+            overallQuantity = tempArray(4)
+            overallRejects = tempArray(5)
+            inspectedQuantity = tempArray(6)
+            inspectedRejects = tempArray(7)
 
-                                    inspectedDPPM = 0
-                                    If inspectedQuantity > 0 Then
-                                        inspectedDPPM = (inspectedRejects / inspectedQuantity) * 1000000
-                                    End If
+            overallDPPM = 0
+            If overallQuantity > 0 Then overallDPPM = (overallRejects / overallQuantity) * 1000000
 
-                                    outputArr(targetRow, 1) = shipmentDate
-                                    outputArr(targetRow, 2) = supplierName
-                                    outputArr(targetRow, 3) = partNumber
-                                    outputArr(targetRow, 4) = inspectedBy
-                                    outputArr(targetRow, 5) = overallQuantity
-                                    outputArr(targetRow, 6) = overallRejects
-                                    outputArr(targetRow, 7) = Format(overallDPPM, "0")
-                                    outputArr(targetRow, 8) = inspectedQuantity
-                                    outputArr(targetRow, 9) = inspectedRejects
-                                    outputArr(targetRow, 10) = Format(inspectedDPPM, "0")
+            inspectedDPPM = 0
+            If inspectedQuantity > 0 Then inspectedDPPM = (inspectedRejects / inspectedQuantity) * 1000000
 
-                                    Debug.Print "Row " & targetRow & ": Data written For key " & key
-                                    targetRow = targetRow + 1
-                                Next key
+            outputArr(targetRow, 1) = shipmentDate
+            outputArr(targetRow, 2) = supplierName
+            outputArr(targetRow, 3) = partNumber
+            outputArr(targetRow, 4) = inspectedBy
+            outputArr(targetRow, 5) = overallQuantity
+            outputArr(targetRow, 6) = overallRejects
+            outputArr(targetRow, 7) = Format(overallDPPM, "0")
+            outputArr(targetRow, 8) = inspectedQuantity
+            outputArr(targetRow, 9) = inspectedRejects
+            outputArr(targetRow, 10) = Format(inspectedDPPM, "0")
 
-                                ' Write all at once To the sheet, starting at row 1
-                                wsTarget.Range("A1").Resize(dataDict.Count + 1, 10).Value = outputArr
+            targetRow = targetRow + 1
+        Next key
 
-                                ' Sort the data by Shipment Date
-                                Debug.Print "Sorting data by Shipment Date."
-                                wsTarget.Sort.SortFields.Clear
-                                wsTarget.Sort.SortFields.Add key:=wsTarget.Columns(1), Order:=xlAscending
-                                With wsTarget.Sort
-                                    .SetRange wsTarget.UsedRange
-                                    .Header = xlYes
-                                    .MatchCase = False
-                                    .Orientation = xlTopToBottom
-                                    .SortMethod = xlPinYin
-                                    .Apply
-                                End With
+        ' Write all data from array to the sheet and create/update table
+        Utils.UpdateStatusBarMessage "Writing data to DPPM table...", True
+        If wsTarget.ListObjects.Count > 0 Then ' Check if any table exists
+            On Error Resume Next
+            wsTarget.ListObjects(Config.DPPM_OUTPUT_TABLE_NAME).Delete
+            On Error GoTo GenericErrorHandler
+        End If
+        wsTarget.Cells.ClearContents ' Clear sheet before writing new data/table
 
-                                ' Auto-fit columns
-                                Debug.Print "Auto-fitting columns."
-                                wsTarget.Columns("A:J").AutoFit
-                                wsTarget.Columns("A:J").HorizontalAlignment = xlCenter
-                                wsTarget.Columns("A:J").VerticalAlignment = xlCenter
+        Dim dataRange As Range
+        If dataDict.Count > 0 Then
+            Set dataRange = wsTarget.Range("A1").Resize(dataDict.Count + 1, 10)
+            dataRange.Value = outputArr
+            Set tblTarget = wsTarget.ListObjects.Add(xlSrcRange, dataRange, , xlYes)
+        Else ' Only headers if no data
+            Set dataRange = wsTarget.Range("A1").Resize(1, 10)
+            dataRange.Value = Application.WorksheetFunction.Index(outputArr, 1, 0) ' Get first row (headers)
+            Set tblTarget = wsTarget.ListObjects.Add(xlSrcRange, dataRange, , xlYes)
+        End If
 
-                                ' Apply Borders
-                                Debug.Print "Applying borders."
-                                With wsTarget.Range("A1:J" & targetRow - 1).Borders
-                                    .LineStyle = xlContinuous
-                                    .ColorIndex = 0
-                                    .TintAndShade = 0
-                                    .Weight = xlThin
-                                End With
+        tblTarget.Name = Config.DPPM_OUTPUT_TABLE_NAME
+        tblTarget.TableStyle = Config.DEFAULT_TABLE_STYLE
+        Utils.LogMessage "[" & PROC_NAME & "] DPPM data written to table '" & Config.DPPM_OUTPUT_TABLE_NAME & "'."
+        Utils.UpdateStatusBarMessage "DPPM data written.", stageComplete:=True
 
-                                Debug.Print "Execution completed: " & Now
+        ' Sort the data by Date (first column)
+        If tblTarget.ListRows.Count > 0 Then
+            Utils.UpdateStatusBarMessage "Sorting DPPM table...", True
+            With tblTarget.Sort
+                .SortFields.Clear
+                .SortFields.Add Key:=tblTarget.ListColumns(Config.DPPM_COL_DATE).Range, SortOn:=xlSortOnValues, Order:=xlAscending
+                .Header = xlYes
+                .MatchCase = False
+                .Orientation = xlTopToBottom
+                .SortMethod = xlPinYin
+                .Apply
+            End With
+            Utils.LogMessage "[" & PROC_NAME & "] Sorted table by " & Config.DPPM_COL_DATE & "."
+            Utils.UpdateStatusBarMessage "DPPM table sorted.", stageComplete:=True
+        End If
 
-                                ' Database info is updated, Update the Summary sheet
-                                Call GenerateSummary
-                                Debug.Print "Summary sheet updated."
+        ' Auto-fit columns and center align
+        Utils.UpdateStatusBarMessage "Formatting DPPM table...", True
+        tblTarget.Range.Columns.AutoFit
+        With tblTarget.Range
+            .HorizontalAlignment = xlCenter
+            .VerticalAlignment = xlCenter
+        End With
+        Utils.LogMessage "[" & PROC_NAME & "] Applied formatting to table."
+        Utils.UpdateStatusBarMessage "DPPM table formatted.", stageComplete:=True
 
-                                MsgBox "DPPM table generated successfully!", vbInformation
+        ' Database info is updated, Update the Summary sheet
+        Utils.LogMessage "[" & PROC_NAME & "] Calling GenerateSummary."
+        Call GenerateDPPMSummary.GenerateSummary ' Explicitly call from module
+        Utils.LogMessage "[" & PROC_NAME & "] Summary generation complete."
+
+        MsgBox "DPPM table and summaries generated successfully!", vbInformation
+        Utils.LogMessage "[" & PROC_NAME & "] Execution completed successfully."
 
 Cleanup:
-                                ' cleanup iqaWorkbook
-                                If Not iqaWorkbook Is Nothing Then
-                                    iqaWorkbook.Close SaveChanges:=False
-                                    Set iqaWorkbook = Nothing
+        If Not iqaWorkbook Is Nothing Then
+            iqaWorkbook.Close SaveChanges:=False
+            Set iqaWorkbook = Nothing
+        End If
+        Set wsSource = Nothing
+        Set wsTarget = Nothing
+        Set wsWafer = Nothing
+        Set tblTarget = Nothing
+        Set tblWafer = Nothing
+        Set dataDict = Nothing
+        Set m_Config = Nothing
 
-                                End If
+        Application.EnableEvents = True
+        Application.Calculation = xlCalculationAutomatic
+        Application.ScreenUpdating = True
+        Utils.ResetStatusBar PROC_NAME
+    Exit Sub
 
-                                ' Release objects To free memory
-                                Set wsSource = Nothing
-                                Set wsTarget = Nothing
-                                Set wsWafer = Nothing
-                                Set dataDict = Nothing
+GenericErrorHandler:
+    Utils.LogMessage "[" & PROC_NAME & "] ERROR " & Err.Number & ": " & Err.Description & " (Line: " & Erl & ")", True
+    Utils.ResetStatusBar PROC_NAME, True, Err.Description
+    MsgBox "An error occurred in " & PROC_NAME & ": " & Err.Description & vbCrLf & "Please check the ExecutionLog.txt for details.", vbCritical
+    Resume CleanUp
+End Sub
 
-                                ' Re-enable screen updating
-                                Application.ScreenUpdating = True
-                             Exit Sub
+Private Function LoadTableModuleConfig(ByVal cfg As Object) As Boolean
+    ' Loads and validates module-specific configuration from the global config object (cfg)
+    ' Populates module-level variables for IQA source column NAMES.
+    ' Column indices will be determined later once the source sheet/table is known.
+    Dim funcName As String: funcName = "LoadTableModuleConfig"
+    Dim missingKeys As String
+    Dim keyName As Variant
+    Dim requiredColNameKeys As Variant
+
+    On Error GoTo ErrorHandler
+    LoadTableModuleConfig = False ' Default to failure
+
+    If cfg Is Nothing Or cfg.Count = 0 Then
+        Utils.LogMessage "[" & PROC_NAME & "] " & funcName & ": Global configuration object is empty or not provided.", True
+        Exit Function
+    End If
+
+    ' Define the configuration keys that provide the COLUMN NAMES for IQA source data
+    requiredColNameKeys = Array( _
+        Config.CONFIG_KEY_IQA_SRC_SHIP_DATE_COLNAME, _
+        Config.CONFIG_KEY_IQA_SRC_INSP_DATE_COLNAME, _
+        Config.CONFIG_KEY_IQA_SRC_SUPPLIER_COLNAME, _
+        Config.CONFIG_KEY_IQA_SRC_PARTNUM_COLNAME, _
+        Config.CONFIG_KEY_IQA_SRC_INSP_BY_COLNAME, _
+        Config.CONFIG_KEY_IQA_SRC_QTY_IN_COLNAME, _
+        Config.CONFIG_KEY_IQA_SRC_REJ_QTY_COLNAME _
+    )
+
+    ' Validate that these keys exist in the global config
+    For Each keyName In requiredColNameKeys
+        If Not cfg.exists(CStr(keyName)) Or Trim(CStr(cfg(CStr(keyName)))) = "" Then
+            missingKeys = missingKeys & vbCrLf & " - " & CStr(keyName)
+        End If
+    Next keyName
+
+    If Len(missingKeys) > 0 Then
+        Utils.LogMessage "[" & PROC_NAME & "] " & funcName & ": Missing or empty configuration for the following keys:" & missingKeys, True
+        MsgBox "Configuration error in " & PROC_NAME & ":" & vbCrLf & _
+               "The following required settings for IQA source column names are missing or empty in the 'Config' sheet:" & _
+               missingKeys & vbCrLf & vbCrLf & "Please check the 'Config' sheet and the ExecutionLog.txt for details.", vbCritical
+        Exit Function
+    End If
+
+    ' Assign column names from config to module-level variables
+    m_SourceShipmentDateColName = Trim(CStr(cfg(Config.CONFIG_KEY_IQA_SRC_SHIP_DATE_COLNAME)))
+    m_InspectedDateColName = Trim(CStr(cfg(Config.CONFIG_KEY_IQA_SRC_INSP_DATE_COLNAME)))
+    m_SupplierNameColName = Trim(CStr(cfg(Config.CONFIG_KEY_IQA_SRC_SUPPLIER_COLNAME)))
+    m_PartNumberColName = Trim(CStr(cfg(Config.CONFIG_KEY_IQA_SRC_PARTNUM_COLNAME)))
+    m_InspectedByColName = Trim(CStr(cfg(Config.CONFIG_KEY_IQA_SRC_INSP_BY_COLNAME)))
+    m_QuantityInColName = Trim(CStr(cfg(Config.CONFIG_KEY_IQA_SRC_QTY_IN_COLNAME)))
+    m_RejectQuantityColName = Trim(CStr(cfg(Config.CONFIG_KEY_IQA_SRC_REJ_QTY_COLNAME)))
+
+    Utils.LogMessage "[" & PROC_NAME & "] " & funcName & ": Module column name configuration loaded successfully.", False
+    LoadTableModuleConfig = True
+    Exit Function
 
 ErrorHandler:
-                                ' Display error message And Resume cleanup
-                                MsgBox "An error occurred: " & Err.Description, vbCritical
-                                Resume Cleanup
-End Sub
+    Utils.LogMessage "[" & PROC_NAME & "] " & funcName & ": ERROR " & Err.Number & " - " & Err.Description, True
+    LoadTableModuleConfig = False
+End Function
 
-Private Sub LoadConfigFromSheet()
-    Dim wsConfig As Worksheet
-    Dim lastRow As Long, i As Long
-    Dim configDict As Object
-
-    ' Set the Config sheet
-    On Error Resume Next
-    Set wsConfig = ThisWorkbook.Sheets("Config")
+Private Function FindAndSetColumnIndex(ByVal headerRow As Range, ByVal colNameConfig As String, ByRef outIndexVar As Long, ByVal wsNameForLog As String) As Boolean
+    ' Helper function to find a column by name in a header row and set its index.
+    Dim foundCell As Range
+    Dim funcName As String: funcName = "FindAndSetColumnIndex"
+    On Error Resume Next ' Keep local error handling for Find
+    Set foundCell = headerRow.Find(What:=colNameConfig, LookIn:=xlValues, LookAt:=xlWhole, MatchCase:=False)
     On Error GoTo 0
-        If wsConfig Is Nothing Then
-            MsgBox "Config sheet Not found!", vbExclamation
-         Exit Sub
-        End If
+    If Not foundCell Is Nothing Then
+        outIndexVar = foundCell.Column
+        FindAndSetColumnIndex = True
+    Else
+        Utils.LogMessage "[" & PROC_NAME & "] " & funcName & ": Column '" & colNameConfig & "' not found in '" & wsNameForLog & "' header row.", True
+        FindAndSetColumnIndex = False
+    End If
+End Function
+Private Function GetColumnIndicesFromSource(tblSource As ListObject) As Boolean
+    ' Determines column indices based on names stored in module-level variables using Excel Table (ListObject).
+    ' This should be called AFTER tblSource is set.
+    Dim funcName As String: funcName = "GetColumnIndicesFromSource"
+    Dim allIndicesFound As Boolean
+    Dim col As ListColumn
 
-        ' Initialize dictionary To store configuration
-        Set configDict = CreateObject("Scripting.Dictionary")
+    On Error GoTo ErrorHandler
+    GetColumnIndicesFromSource = False ' Default to failure
+    allIndicesFound = True
 
-        ' Find the last row in the Config sheet
-        lastRow = wsConfig.Cells(wsConfig.Rows.Count, 1).End(xlUp).Row
+    If tblSource Is Nothing Then
+        Utils.LogMessage "[" & PROC_NAME & "] " & funcName & ": Source table is not set.", True
+        Exit Function
+    End If
 
-        ' Loop through each row in the Config sheet
-        For i = 2 To lastRow ' Assuming row 1 contains headers
-            If wsConfig.Cells(i, 1).Value <> "" Then
-                configDict(wsConfig.Cells(i, 1).Value) = wsConfig.Cells(i, 2).Value
-            End If
-        Next i
+    ' Helper to get column index by name from ListObject
+    Dim functionColIdx As Long
+    functionColIdx = 0
+    
+    ' Use ListColumns to get indices
+    On Error Resume Next
+    m_SourceShipmentDateColIdx = tblSource.ListColumns(m_SourceShipmentDateColName).Index
+    If m_SourceShipmentDateColIdx = 0 Then allIndicesFound = False
+    m_InspectedDateColIdx = tblSource.ListColumns(m_InspectedDateColName).Index
+    If m_InspectedDateColIdx = 0 Then allIndicesFound = False
+    m_SupplierNameColIdx = tblSource.ListColumns(m_SupplierNameColName).Index
+    If m_SupplierNameColIdx = 0 Then allIndicesFound = False
+    m_PartNumberColIdx = tblSource.ListColumns(m_PartNumberColName).Index
+    If m_PartNumberColIdx = 0 Then allIndicesFound = False
+    m_InspectedByColIdx = tblSource.ListColumns(m_InspectedByColName).Index
+    If m_InspectedByColIdx = 0 Then allIndicesFound = False
+    m_QuantityInColIdx = tblSource.ListColumns(m_QuantityInColName).Index
+    If m_QuantityInColIdx = 0 Then allIndicesFound = False
+    m_RejectQuantityColIdx = tblSource.ListColumns(m_RejectQuantityColName).Index
+    If m_RejectQuantityColIdx = 0 Then allIndicesFound = False
+    On Error GoTo 0
 
-        ' Example: Accessing configuration values
-        If configDict.exists("IQA Database Path") Then
-            Debug.Print "IQA Database Path: " & configDict("IQA Database Path")
-        End If
+    If allIndicesFound Then
+        Utils.LogMessage "[" & PROC_NAME & "] " & funcName & ": All source column indices determined successfully (using table).", False
+        GetColumnIndicesFromSource = True
+    Else
+        MsgBox "One or more required columns were not found in the IQA Database table ('" & tblSource.Name & "')." & vbCrLf & _
+               "Please check the column names in the source table against the configuration and the ExecutionLog.txt for details.", vbCritical
+    End If
+    Exit Function
 
-        If configDict.exists("Shipment Date Column") Then
-            ShipmentDateCol = configDict("Shipment Date Column")
-        End If
+ErrorHandler:
+    Utils.LogMessage "[" & PROC_NAME & "] " & funcName & ": ERROR " & Err.Number & " - " & Err.Description, True
+    GetColumnIndicesFromSource = False
+End Function
 
-        If configDict.exists("Inspected Date Column") Then
-            InspectedDateCol = configDict("Inspected Date Column")
-        End If
-
-        If configDict.exists("Supplier Name Column") Then
-            SupplierNameCol = configDict("Supplier Name Column")
-        End If
-
-        If configDict.exists("Part Number Column") Then
-            PartNumberCol = configDict("Part Number Column")
-        End If
-
-        If configDict.exists("Inspected By Column") Then
-            InspectedByCol = configDict("Inspected By Column")
-        End If
-
-        If configDict.exists("Quantity In Column") Then
-            QuantityInCol = configDict("Quantity In Column")
-        End If
-
-        If configDict.exists("Reject Quantity Column") Then
-            RejectQuantityCol = configDict("Reject Quantity Column")
-        End If
-
-        ' Store the configuration dictionary in a global variable For reuse
-        Set GlobalConfig = configDict
-
-        Debug.Print "Configuration loaded successfully!"
-End Sub
-
-Private Function SetupIQADatabase(ByRef iqaWorkbook) As Worksheet
+Private Function SetupIQADatabase(ByRef iqaWorkbook As Workbook, ByVal cfg As Object) As ListObject
     Dim iqaSource As Worksheet
     Dim iqaDatabasePath As String
 
@@ -358,47 +458,59 @@ Private Function SetupIQADatabase(ByRef iqaWorkbook) As Worksheet
 
         ' Retrieve the IQA Database path from the Config sheet
         iqaDatabasePath = ""
-        If Not GlobalConfig Is Nothing Then
-            If GlobalConfig.exists("IQA Database Path") Then
-                iqaDatabasePath = GlobalConfig("IQA Database Path")
-            End If
+        If Not cfg Is Nothing And cfg.exists(Config.CONFIG_KEY_IQA_DB_PATH) Then
+            iqaDatabasePath = cfg(Config.CONFIG_KEY_IQA_DB_PATH)
         End If
 
         If iqaDatabasePath = "" Then
-            MsgBox "IQA Database path Not found in Config sheet!", vbExclamation
-         Exit Function
+            Utils.LogMessage "[" & PROC_NAME & "] IQA Database path key '" & Config.CONFIG_KEY_IQA_DB_PATH & "' not found or empty in configuration!", True
+            Exit Function
         End If
 
-        ' Open the IQA Database workbook
-        Application.EnableEvents = False
+        ' Add a logic that will disable all macros when opening the IQA Database
+        ' This is to ensure that the IQA Database is opened in a safe mode
         Set iqaWorkbook = Workbooks.Open(Filename:=iqaDatabasePath, ReadOnly:=True, IgnoreReadOnlyRecommended:=True, UpdateLinks:=False)
-        Application.EnableEvents = True
-
         If iqaWorkbook Is Nothing Then
-            MsgBox "Failed To open IQA Database at: " & iqaDatabasePath, vbExclamation
-         Exit Function
+            Utils.LogMessage "[" & PROC_NAME & "] Failed to open IQA Database at: " & iqaDatabasePath, True
+            Exit Function
         End If
 
-        Set iqaSource = iqaWorkbook.Sheets("IQA Database")
+        Set iqaSource = iqaWorkbook.Sheets(Config.IQA_SHEET_NAME) ' Use constant from Config.bas
         If iqaSource Is Nothing Then
-            MsgBox "IQA Database sheet Not found in the workbook!", vbExclamation
-            iqaWorkbook.Close SaveChanges:=False
-         Exit Function
+            Utils.LogMessage "[" & PROC_NAME & "] Sheet '" & Config.IQA_SHEET_NAME & "' not found in the IQA workbook!", True
+            MsgBox "Sheet '" & Config.IQA_SHEET_NAME & "' not found in the IQA workbook!", vbExclamation
+            Exit Function
         End If
 
-        ' remove active filter in the IQA Database sheet
-        iqaSource.AutoFilterMode = False
-
-        Debug.Print "IQA Database setup successfully!"
-        Set SetupIQADatabase = iqaSource
-
-     Exit Function
-
-ErrorHandler:
-        MsgBox "An error occurred While setting up IQA Database: " & Err.Description, vbCritical
-        If Not iqaWorkbook Is Nothing Then
-            iqaWorkbook.Close SaveChanges:=False
+        Dim tblIQA As ListObject
+        Set tblIQA = Nothing ' Reset the table variable to ensure it's not stale
+        Set tblIQA = iqaSource.ListObjects(Config.IQA_TABLE_NAME) ' Use constant from Config.bas
+        If tblIQATable Is Nothing Then
+            Utils.LogMessage "[" & PROC_NAME & "] Table '" & Config.IQA_TABLE_NAME & "' not found in the IQA sheet '" & Config.IQA_SHEET_NAME & "'.", True
+            MsgBox "Table '" & Config.IQA_TABLE_NAME & "' not found in the IQA sheet '" & Config.IQA_SHEET_NAME & "'.", vbExclamation
+            Exit Function
         End If
+
+        ' remove active filter in the IQA Database table if it exists
+        If tblIQA.AutoFilter.FilterMode Then
+            tblIQA.AutoFilter.ShowAllData
+        End If
+        Utils.LogMessage "[" & PROC_NAME & "] IQA Database setup successfully from: " & iqaDatabasePath, False
+        
+        ' After successfully setting wsSource, get the column indices
+        If Not GetColumnIndicesFromSource(tblIQA) Then
+            Set tblIQA = Nothing ' Indicate failure
+            ' Error already logged by GetColumnIndicesFromSource
+            Exit Function
+        End If
+        
+        Set SetupIQADatabase = tblIQA
+
+    Exit Function
+
+ErrorHandler: ' Corrected label
+        Utils.LogMessage "[" & PROC_NAME & "] Error setting up IQA Database: " & Err.Description, True
+        ' iqaWorkbook will be closed in the main CleanUp block if it was opened
         Application.EnableEvents = True
-     Exit Function
+        Set SetupIQADatabase = Nothing
 End Function
