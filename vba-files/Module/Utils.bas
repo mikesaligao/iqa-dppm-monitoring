@@ -27,7 +27,7 @@ Function GetSheet(sheetName As String) As Worksheet
         Set GetSheet = Nothing
         Err.Clear
     End If
-    On Error Goto 0
+    On Error GoTo 0
 End Function
 
 Function GetLastRow(ws As Worksheet, Optional columnRef As Variant = 1) As Long
@@ -36,12 +36,12 @@ Function GetLastRow(ws As Worksheet, Optional columnRef As Variant = 1) As Long
      Exit Function
     End If
     On Error Resume Next ' In Case sheet is empty
-    GetLastRow = ws.Cells(ws.Rows.Count, columnRef).End(xlUp).row
+    GetLastRow = ws.Cells(ws.Rows.Count, columnRef).End(xlUp).Row
     If Err.Number <> 0 Then
         GetLastRow = 1 ' Default To 1 If error (e.g., empty sheet)
         Err.Clear
     End If
-    On Error Goto 0
+    On Error GoTo 0
 End Function
 
 ' --- Data Handling ---
@@ -55,7 +55,7 @@ Function Nz(value As Variant, Optional defaultValue As Variant = "") As Variant
     ' Handles Null, Empty, Error, And Blank strings
     If isError(value) Then
         Nz = defaultValue
-    Elseif IsEmpty(value) Or IsNull(value) Or Trim(CStr(value)) = "" Then
+    ElseIf IsEmpty(value) Or IsNull(value) Or Trim(CStr(value)) = "" Then
         Nz = defaultValue
     Else
         Nz = value
@@ -68,14 +68,14 @@ Public Sub InitLogFile()
     Dim FileNum As Integer
     Dim timeStamp As String
 
-    On Error Goto ErrHandler
+    On Error GoTo ErrHandler
 
         logFilePath = ThisWorkbook.Path & "\ExecutionLog.txt"
         ' kill the logfile If its already opened
         If Dir(logFilePath) <> "" Then
             On Error Resume Next ' Ignore errors If file is open
             Kill logFilePath
-            On Error Goto ErrHandler ' Restore error handling
+            On Error GoTo ErrHandler ' Restore error handling
             End If
 
             FileNum = FreeFile
@@ -89,7 +89,7 @@ Public Sub InitLogFile()
             logFileInitialized = True
          Exit Sub
 
- ErrHandler:
+ErrHandler:
             Debug.Print "[ERROR] Failed To initialize log file: " & Err.Description
             logFileInitialized = False
 End Sub
@@ -111,7 +111,7 @@ Public Sub LogMessage(message As String, Optional isError As Boolean = False)
         On Error Resume Next
 
         Open logFilePath For Append As #FileNum
-        If Err.Number <> 0 Then Goto CleanUp ' Cannot open log file
+        If Err.Number <> 0 Then GoTo CleanUp ' Cannot open log file
 
             If isError Then
                 Print #FileNum, "[ERROR] " & timeStamp & " - " & message
@@ -122,9 +122,9 @@ Public Sub LogMessage(message As String, Optional isError As Boolean = False)
                 Debug.Print "[INFO]  " & timeStamp & " - " & message
             End If
 
- CleanUp:
+CleanUp:
             If FileNum > 0 Then Close #FileNum
-                On Error Goto 0 ' Restore default error handling
+                On Error GoTo 0 ' Restore default error handling
 End Sub
 
 Public Sub DeleteExecutionLog()
@@ -137,11 +137,11 @@ Public Sub DeleteExecutionLog()
     Else
         Debug.Print "ExecutionLog.txt does Not exist."
     End If
-    On Error Goto 0 ' Reset error handling
+    On Error GoTo 0 ' Reset error handling
 End Sub
 
 ' --- Worksheet Protection ---
-Public Sub ProtectSheet(ws As Worksheet, Optional Byval password As String = "")
+Public Sub ProtectSheet(ws As Worksheet, Optional ByVal password As String = "")
     If ws Is Nothing Then
         LogMessage "Cannot protect sheet: Worksheet object is Nothing.", True
      Exit Sub
@@ -155,7 +155,7 @@ Public Sub ProtectSheet(ws As Worksheet, Optional Byval password As String = "")
     '     VisibleDropDown:=True
     'End If
 
-    On Error Goto ErrHandler
+    On Error GoTo ErrHandler
         If password <> "" Then
             ws.Protect password:=password, DrawingObjects:=True, Contents:=True, Scenarios:=True, _
             AllowSorting:=True, _
@@ -171,18 +171,18 @@ Public Sub ProtectSheet(ws As Worksheet, Optional Byval password As String = "")
         End If
      Exit Sub
 
- ErrHandler:
+ErrHandler:
         LogMessage "Error protecting sheet '" & ws.Name & "'. " & Err.Description, True
         Err.Clear
 End Sub
 
-Public Sub UnprotectSheet(ws As Worksheet, Optional Byval password As String = "")
+Public Sub UnprotectSheet(ws As Worksheet, Optional ByVal password As String = "")
     If ws Is Nothing Then
         LogMessage "Cannot unprotect sheet: Worksheet object is Nothing.", True
      Exit Sub
     End If
 
-    On Error Goto ErrHandler
+    On Error GoTo ErrHandler
         If password <> "" Then
             ws.Unprotect password:=password
             LogMessage "Sheet '" & ws.Name & "' unprotected With a password."
@@ -192,7 +192,7 @@ Public Sub UnprotectSheet(ws As Worksheet, Optional Byval password As String = "
         End If
      Exit Sub
 
- ErrHandler:
+ErrHandler:
         LogMessage "Error unprotecting sheet '" & ws.Name & "'. " & Err.Description, True
         Err.Clear
 End Sub
@@ -209,13 +209,13 @@ Public Function GetColumnIndexByName(tbl As ListObject, columnName As String) As
         LogMessage "GetColumnIndexByName: Column '" & columnName & "' Not found in table '" & tbl.Name & "'. Error: " & Err.Description, True
         Err.Clear
     End If
-    On Error Goto 0
+    On Error GoTo 0
 End Function
 
 ' --- Status Bar Helper Procedures ---
 
 ' Initializes the status bar For a procedure
-Public Sub InitStatusBar(Byval procName As String)
+Public Sub InitStatusBar(ByVal procName As String)
     On Error Resume Next ' Ignore errors If status bar is unavailable
     If g_blnStatusBarActive And Application.StatusBar <> False Then Exit Sub ' Avoid nested control If already active
 
@@ -228,11 +228,11 @@ Public Sub InitStatusBar(Byval procName As String)
 End Sub
 
 ' Updates the status bar With a progress message, visual bar, percentage, And ETA
-Public Sub UpdateStatusBarProgress(Byval operation As String, _
-    Byval currentStep As Long, _
-    Byval totalSteps As Long, _
-    Optional Byval procStartTime As Double = 0, _
-    Optional Byval subTask As String = "")
+Public Sub UpdateStatusBarProgress(ByVal operation As String, _
+    ByVal currentStep As Long, _
+    ByVal totalSteps As Long, _
+    Optional ByVal procStartTime As Double = 0, _
+    Optional ByVal subTask As String = "")
     On Error Resume Next
     If Not g_blnStatusBarActive Then Exit Sub
 
@@ -249,7 +249,7 @@ Public Sub UpdateStatusBarProgress(Byval operation As String, _
                 percentage = 100
                 filledLength = STATUS_BAR_PROGRESS_BAR_LENGTH
                 progressBar = "[" & String(STATUS_BAR_PROGRESS_BAR_LENGTH, ChrW(&H25A0)) & "]" ' Full bar (solid squares)
-            Elseif currentStep <= 0 Then
+            ElseIf currentStep <= 0 Then
                 percentage = 0
                 filledLength = 0
                 progressBar = "[" & String(STATUS_BAR_PROGRESS_BAR_LENGTH, ChrW(&H25A1)) & "]" ' Empty bar (empty squares)
@@ -258,7 +258,7 @@ Public Sub UpdateStatusBarProgress(Byval operation As String, _
                 filledLength = Application.WorksheetFunction.RoundDown(percentage / 100 * STATUS_BAR_PROGRESS_BAR_LENGTH, 0)
                 If filledLength = 0 Then ' Progress started but Not enough For one block
                     progressBar = "[" & String(1, ChrW(&H25B6)) & String(STATUS_BAR_PROGRESS_BAR_LENGTH - 1, ChrW(&H25A1)) & "]" ' Triangle head, Then empty squares
-                Elseif filledLength >= STATUS_BAR_PROGRESS_BAR_LENGTH Then
+                ElseIf filledLength >= STATUS_BAR_PROGRESS_BAR_LENGTH Then
                     progressBar = "[" & String(STATUS_BAR_PROGRESS_BAR_LENGTH, ChrW(&H25A0)) & "]"
                 Else
                     progressBar = "[" & String(filledLength, ChrW(&H25A0)) & String(1, ChrW(&H25B6)) & String(STATUS_BAR_PROGRESS_BAR_LENGTH - filledLength - 1, ChrW(&H25A1)) & "]"
@@ -281,7 +281,7 @@ Public Sub UpdateStatusBarProgress(Byval operation As String, _
                     If etaSeconds >= 0 Then
                         If etaSeconds < 60 Then
                             etaString = " (ETA: " & Format(etaSeconds, "0") & "s)"
-                        Elseif etaSeconds < 3600 Then
+                        ElseIf etaSeconds < 3600 Then
                             etaString = " (ETA: " & Format(etaSeconds / 60, "0") & "m " & Format(etaSeconds Mod 60, "0") & "s)"
                         Else
                             etaString = " (ETA: " & Format(etaSeconds / 3600, "0") & "h " & Format((etaSeconds Mod 3600) / 60, "0") & "m)"
@@ -304,7 +304,7 @@ Public Sub UpdateStatusBarProgress(Byval operation As String, _
 End Sub
 
 ' Updates the status bar With a simple message, optionally With a spinner Or completion checkmark
-Public Sub UpdateStatusBarMessage(Byval message As String, Optional Byval useSpinner As Boolean = False, Optional Byval stageComplete As Boolean = False)
+Public Sub UpdateStatusBarMessage(ByVal message As String, Optional ByVal useSpinner As Boolean = False, Optional ByVal stageComplete As Boolean = False)
     On Error Resume Next
     If Not g_blnStatusBarActive Then Exit Sub
 
@@ -327,7 +327,7 @@ Public Sub UpdateStatusBarMessage(Byval message As String, Optional Byval useSpi
 End Sub
 
 ' Resets the status bar after completion Or error
-Public Sub ResetStatusBar(Optional Byval procName As String = "", Optional Byval errOccurred As Boolean = False, Optional Byval errDescription As String = "")
+Public Sub ResetStatusBar(Optional ByVal procName As String = "", Optional ByVal errOccurred As Boolean = False, Optional ByVal errDescription As String = "")
     On Error Resume Next
     If Not g_blnStatusBarActive And procName = "" And Not errOccurred Then
         If Application.StatusBar <> False Then Application.StatusBar = False
@@ -339,7 +339,7 @@ Public Sub ResetStatusBar(Optional Byval procName As String = "", Optional Byval
             errMsg = "Error in " & procName & ": " & errDescription & ". Check logs."
             Application.StatusBar = errMsg
             LogMessage "StatusBar: " & errMsg ' Utils.LogMessage becomes LogMessage
-        Elseif procName <> "" Then
+        ElseIf procName <> "" Then
             Dim successMsg As String
             successMsg = procName & " completed. Ready."
             Application.StatusBar = successMsg
@@ -382,13 +382,35 @@ Private Sub LoadGlobalConfig()
     lastRow = wsConfig.Cells(wsConfig.Rows.Count, 1).End(xlUp).Row
     For i = 2 To lastRow ' Assuming row 1 contains headers
         Dim keyStr As String, valStr As String
-        keyStr = Trim(CStr(wsConfig.Cells(i, 1).Value))
-        valStr = Trim(CStr(wsConfig.Cells(i, 2).Value))
+        keyStr = Trim(CStr(wsConfig.Cells(i, 1).value))
+        valStr = Trim(CStr(wsConfig.Cells(i, 2).value))
         If keyStr <> "" Then g_ConfigDict(keyStr) = valStr
     Next i
     LogMessage "[" & procName & "] Configuration loaded: " & g_ConfigDict.Count & " items.", False
     Exit Sub
+
+    'Add public constants for common config keys
+    g_ConfigDict("SupplierMonthlySummarySheetName") = Config.CONFIG_KEY_DPPM_SUPPLIER_SHEET_NAME
+    g_ConfigDict("SupplierMonthlySummaryTableName") = Config.CONFIG_KEY_DPPM_SUPPLIER_TABLE_NAME
 ErrorHandler:
     LogMessage "[" & procName & "] ERROR " & Err.Number & ": " & Err.Description, True
     Set g_ConfigDict = CreateObject("Scripting.Dictionary") ' Return empty dict on error
 End Sub
+
+'=====================================================================================
+' Public Function: GetOrCreateSheet
+' Purpose: Returns worksheet by name or creates it if not found.
+'=====================================================================================
+Public Function GetOrCreateSheet(wb As Workbook, sheetName As String) As Worksheet
+    Dim procName As String: procName = "GetOrCreateSheet (Summary)"
+    On Error Resume Next
+    Set GetOrCreateSheet = wb.Sheets(sheetName)
+    On Error GoTo 0
+    If GetOrCreateSheet Is Nothing Then
+        Set GetOrCreateSheet = wb.Sheets.Add
+        GetOrCreateSheet.Name = sheetName
+        Utils.LogMessage "[" & procName & "] Created new sheet: '" & sheetName & "'."
+    Else
+        Utils.LogMessage "[" & procName & "] Found existing sheet: '" & sheetName & "'."
+    End If
+End Function

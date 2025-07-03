@@ -1,0 +1,24 @@
+<customUI xmlns="http://schemas.microsoft.com/office/2009/07/customui">
+  <ribbon>
+    <tabs>
+      <tab id="tabExcelitas" label="Excelitas">
+
+        <group id="grpDPPMMonitoring" label="DPPM Monitoring">
+          <!-- Add tools here later --> 
+
+          <button id="btnGenerateDPPMTable"
+                  label="Generate DPPM Table"
+                  imageMso="TableInsert"
+                  size="large"
+                  onAction="GenerateTable"/>
+
+          <button id="btnGenerateSummary"
+                  label="Generate DPPM Summary"
+                  imageMso="PivotTableInsert"
+                  size="large"
+                  onAction="GenerateSummary"/>
+        </group>
+      </tab>
+    </tabs>
+  </ribbon>
+</customUI>
