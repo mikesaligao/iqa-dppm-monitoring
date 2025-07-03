@@ -19,7 +19,7 @@ Private m_Config As Object
 ' Public Sub: GenerateTable
 ' Purpose: Entry point to generate the DPPM output table and trigger summary
 '=====================================================================================
-Public Sub GenerateTable()
+Public Sub GenerateTable(Optional control As IRibbonControl = Nothing)
     Dim PROC_NAME As String: PROC_NAME = Config.PROC_GENERATE_TABLE
     Dim tblIQA As ListObject, wsTarget As Worksheet, wsWafer As Worksheet, tblTarget As ListObject, tblWafer As ListObject
     Dim dataArr As Variant, outputArr() As Variant
@@ -74,7 +74,14 @@ Public Sub GenerateTable()
     outputArr = BuildDPPMOutputArray(dataDict)
 
     ' Write to sheet and format
-    Set wsTarget = tblIQA.Parent ' Output to same workbook as IQA source
+    ' Get or create target sheet
+    'Dim wsTarget As Worksheet
+    Set wsTarget = Utils.GetOrCreateSheet(ThisWorkbook, Config.DPPM_OUTPUT_SHEET_NAME)
+    If wsTarget Is Nothing Then
+        Utils.LogMessage "[" & PROC_NAME & "] Could not get or create target sheet.", True
+        Exit Sub
+    End If
+    
     WriteDPPMTable wsTarget, outputArr, Config.DPPM_OUTPUT_TABLE_NAME
     FormatDPPMTable wsTarget, Config.DPPM_OUTPUT_TABLE_NAME
 
@@ -121,7 +128,7 @@ Private Function AggregateDPPMData(dataArr As Variant, tblIQA As ListObject, tbl
     Dim colIdxShipDate As Long, colIdxInspDate As Long, colIdxSupplier As Long, colIdxPartNum As Long, colIdxInspBy As Long, colIdxQtyIn As Long, colIdxRejQty As Long
     Set dataDict = CreateObject("Scripting.Dictionary")
     colIdxShipDate = tblIQA.ListColumns(Config.IQA_COL_SHIP_DATE).Index
-    colIdxInspDate = tblIQA.ListColumns(Config.IQA_COL_INSPECTED_BY).Index
+    colIdxInspDate = tblIQA.ListColumns(Config.IQA_COL_INSPECTION_START_DATE).Index
     colIdxSupplier = tblIQA.ListColumns(Config.IQA_COL_SUPPLIER).Index
     colIdxPartNum = tblIQA.ListColumns(Config.IQA_COL_PART_NUM).Index
     colIdxInspBy = tblIQA.ListColumns(Config.IQA_COL_INSPECTED_BY).Index
@@ -137,7 +144,7 @@ Private Function AggregateDPPMData(dataArr As Variant, tblIQA As ListObject, tbl
             ' Convert Serial to Date
             shipmentDate = Format(CDate(dataArr(i, colIdxShipDate)), "yyyy-MM-dd")
             If Not IsDate(shipmentDate) Then
-                Utils.LogMessage "[" & Config.PROC_GENERATE_TABLE & "] Invalid shipment date at row " & i & ". Skipping row."
+                Utils.LogMessage "[" & Config.PROC_GENERATE_TABLE & "] Invalid shipment date at row " & i & ". Found: " & shipmentDate & ",  Skipping row."
                 GoTo NextRow
             End If
         End If
@@ -147,11 +154,11 @@ Private Function AggregateDPPMData(dataArr As Variant, tblIQA As ListObject, tbl
             inspectedDate = Format(CDate(dataArr(i, colIdxInspDate)), "yyyy-MM-dd")
             If Not IsDate(inspectedDate) Then
                 inspectedDate = shipmentDate ' If inspection date is invalid, use shipment date
-                Utils.LogMessage "[" & Config.PROC_GENERATE_TABLE & "] No inspection date found, using shipment date for row " & i & "."
+                Utils.LogMessage "[" & Config.PROC_GENERATE_TABLE & "] No inspection date found, using shipment date for row " & i & ". Found:" & inspectedDate
             End If
         Else
             inspectedDate = shipmentDate ' If no inspection date, use shipment date
-            Utils.LogMessage "[" & Config.PROC_GENERATE_TABLE & "] No inspection date found, using shipment date for row " & i & "."
+            Utils.LogMessage "[" & Config.PROC_GENERATE_TABLE & "] No inspection date found, using shipment date for row " & i & ". Found:" & dataArr(i, colIdxInspDate)
         End If
 
         supplierName = Trim(CStr(dataArr(i, colIdxSupplier)))
@@ -236,10 +243,10 @@ Private Sub WriteDPPMTable(wsTarget As Worksheet, outputArr As Variant, tableNam
     wsTarget.Cells.ClearContents
     If UBound(outputArr, 1) > 1 Then
         Set dataRange = wsTarget.Range("A1").Resize(UBound(outputArr, 1), 10)
-        dataRange.Value = outputArr
+        dataRange.value = outputArr
     Else
         Set dataRange = wsTarget.Range("A1").Resize(1, 10)
-        dataRange.Value = Application.WorksheetFunction.Index(outputArr, 1, 0)
+        dataRange.value = Application.WorksheetFunction.Index(outputArr, 1, 0)
     End If
     On Error Resume Next
     wsTarget.ListObjects(tableName).Delete
@@ -263,7 +270,7 @@ Private Sub FormatDPPMTable(wsTarget As Worksheet, tableName As String)
         Utils.UpdateStatusBarMessage "Sorting DPPM table...", True
         With tblTarget.Sort
             .SortFields.Clear
-            .SortFields.Add Key:=tblTarget.ListColumns(Config.DPPM_COL_DATE).Range, SortOn:=xlSortOnValues, Order:=xlAscending
+            .SortFields.Add key:=tblTarget.ListColumns(Config.DPPM_COL_DATE).Range, SortOn:=xlSortOnValues, Order:=xlAscending
             .Header = xlYes
             .MatchCase = False
             .Orientation = xlTopToBottom
@@ -295,7 +302,7 @@ Private Function GetChipsPerWafer(tblWafer As ListObject, partNumber As String) 
     On Error Resume Next
     idxPartNum = tblWafer.ListColumns(Config.WAFER_LIST_COL_PART_NUM).Index
     idxChips = tblWafer.ListColumns(Config.WAFER_LIST_COL_CHIPS_PER_WAFER).Index
-    waferPartArr = tblWafer.DataBodyRange.Value
+    waferPartArr = tblWafer.DataBodyRange.value
     For waferRow = 1 To UBound(waferPartArr, 1)
         If Trim(CStr(waferPartArr(waferRow, idxPartNum))) = partNumber Then
             GetChipsPerWafer = waferPartArr(waferRow, idxChips)

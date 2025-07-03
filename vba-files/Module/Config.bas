@@ -113,6 +113,8 @@ Public Const CONFIG_KEY_DPPM_WEEKLY_SHEET_NAME As String = "WeeklySummary"
 Public Const CONFIG_KEY_DPPM_WEEKLY_TABLE_NAME As String = "tblWeeklySummary"
 Public Const CONFIG_KEY_DPPM_MONTHLY_SHEET_NAME As String = "MonthlySummary"
 Public Const CONFIG_KEY_DPPM_MONTHLY_TABLE_NAME As String = "tblMonthlySummary"
+Public Const CONFIG_KEY_DPPM_SUPPLIER_SHEET_NAME As String = "SupplierSummary"
+Public Const CONFIG_KEY_DPPM_SUPPLIER_TABLE_NAME As String = "tblSupplierSummary"
 
 ' Column Names for Summary Tables
 Public Const SUMMARY_COL_PERIOD As String = "Date" ' Or "Period"; holds Day, Week (YYYY-WW##), Month (YYYY-MMMM)
@@ -135,3 +137,4 @@ Public Const PROC_GENERATE_TABLE As String = "GenerateDPPMTable"
 Public Const PROC_GENERATE_TABLE_WRITE As String = "GenerateTable_WriteDPPMTable"
 Public Const PROC_GENERATE_TABLE_FORMAT As String = "GenerateTable_FormatDPPMTable"
 Public Const PROC_LOAD_IQA_DB As String = "GenerateTable_LoadIQADatabase"
+ 
